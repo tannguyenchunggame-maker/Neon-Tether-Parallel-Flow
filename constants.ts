@@ -9,14 +9,14 @@ export const COLORS = {
 };
 
 export const PHYSICS = {
-  MIN_SPACING: 20,
+  MIN_SPACING: 25,      // Keep them separate (24px total diameter for balls)
   MAX_SPACING: 150,
   REST_SPACING: 30,
   BALL_RADIUS: 12,
-  SPRING_K: 0.1,      // Reduced from 0.15 for smoother elasticity
-  DAMPING: 0.8,       // Reduced from 0.9 (lower value = higher damping) to stop shaking faster
+  SPRING_K: 0.05,
+  DAMPING: 0.62,
   SCROLL_SPEED_BASE: 5,
-  SNAP_STRENGTH: 0.12 // Slightly increased to ensure a firm but damped return
+  SNAP_STRENGTH: 0.07
 };
 
 export const INITIAL_STABILITY = 100;

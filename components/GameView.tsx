@@ -8,7 +8,7 @@ interface GameViewProps {
   skipTutorial?: boolean;
 }
 
-const GameView: React.FC<GameViewProps> = ({ onGameOver, skipTutorial = false }) => {
+export default function GameView({ onGameOver, skipTutorial = false }: GameViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [score, setScore] = useState(0);
@@ -40,7 +40,7 @@ const GameView: React.FC<GameViewProps> = ({ onGameOver, skipTutorial = false })
     mirrorTimeout: 0,
     currentStep: 0,
     isCountingDown: false,
-    isReady: false // Always start as false to allow countdown
+    isReady: false 
   });
 
   const generateObstacle = (y: number): Obstacle => {
@@ -54,6 +54,13 @@ const GameView: React.FC<GameViewProps> = ({ onGameOver, skipTutorial = false })
 
     const type = types[Math.floor(Math.random() * types.length)];
     
+    // STRICT CONSTANTS FOR GAPS (NO RANDOMNESS)
+    // Single sphere width is 24px. Two spheres touching is 48px.
+    // At rest, centers are 60px apart + 24px diameter = 84px total span.
+    const SINGLE_HOLE_GAP = 105; // Increased from 90px to provide more clearance for both spheres
+    const DOUBLE_HOLE_GAP = 45;  // Increased from 42px. Still < 48px to prevent two spheres passing through one hole.
+    const TWINS_HOLE_DISTANCE = 160; // Fixed distance between the two holes
+    
     let obs: Obstacle = {
       id: Date.now() + Math.random(),
       y: y,
@@ -64,17 +71,18 @@ const GameView: React.FC<GameViewProps> = ({ onGameOver, skipTutorial = false })
 
     if (type === 'NEEDLE') {
       obs.gapCenter = (Math.random() - 0.5) * (w * 0.6);
-      obs.gapSize = 85;
+      obs.gapSize = SINGLE_HOLE_GAP;
     } else if (type === 'TWINS') {
-      const holeDistance = 100 + Math.random() * 150; 
-      obs.leftGapCenter = -holeDistance / 2;
-      obs.rightGapCenter = holeDistance / 2;
-      obs.gapSize = 80;
+      // The entire obstacle group can be offset, but the internal spacing is fixed
+      const offset = (Math.random() - 0.5) * (w * 0.3);
+      obs.leftGapCenter = offset - TWINS_HOLE_DISTANCE / 2;
+      obs.rightGapCenter = offset + TWINS_HOLE_DISTANCE / 2;
+      obs.gapSize = DOUBLE_HOLE_GAP; 
     } else if (type === 'SPLITTER') {
       obs.gapSize = w * 0.8; 
     } else if (type === 'WEAVER') {
       obs.gapCenter = Math.sin(y / 200) * (w * 0.3);
-      obs.gapSize = 90;
+      obs.gapSize = SINGLE_HOLE_GAP;
     } else if (type === 'PENDULUM') {
       obs.gapCenter = 0;
       obs.gapSize = 180;
@@ -82,7 +90,7 @@ const GameView: React.FC<GameViewProps> = ({ onGameOver, skipTutorial = false })
       obs.rotSpeed = 0.05 + Math.random() * 0.05;
     } else if (type === 'PHANTOM') {
       obs.gapCenter = (Math.random() - 0.5) * (w * 0.5);
-      obs.gapSize = 80;
+      obs.gapSize = SINGLE_HOLE_GAP;
       obs.isFake = Math.random() > 0.5;
       obs.glitchTimer = 0;
     } else if (type === 'PORTAL') {
@@ -103,9 +111,7 @@ const GameView: React.FC<GameViewProps> = ({ onGameOver, skipTutorial = false })
     }
   }, []);
 
-  // Effect to manage the 3s countdown transition
   useEffect(() => {
-    // If tutorial is finished or was skipped, start the countdown
     if (!showTutorial && !gameStateRef.current.isReady && !gameStateRef.current.isCountingDown) {
       gameStateRef.current.isCountingDown = true;
       let count = 3;
@@ -119,7 +125,6 @@ const GameView: React.FC<GameViewProps> = ({ onGameOver, skipTutorial = false })
           setCountdown(null);
           gameStateRef.current.isReady = true;
           gameStateRef.current.isCountingDown = false;
-          // Pre-populate initial safe obstacles ahead of player
           for (let i = 0; i < 5; i++) {
             gameStateRef.current.obstacles.push(generateObstacle(-500 - i * 500));
           }
@@ -149,28 +154,20 @@ const GameView: React.FC<GameViewProps> = ({ onGameOver, skipTutorial = false })
     const update = (dt: number) => {
       const state = gameStateRef.current;
       
-      // PHYSICS ALWAYS UPDATES FOR RESPONSIVE FEEL
       const targetSpacing = state.isTouching 
-        ? Math.max(PHYSICS.MIN_SPACING, Math.min(PHYSICS.MAX_SPACING, PHYSICS.REST_SPACING + state.inputY))
+        ? Math.max(PHYSICS.MIN_SPACING, Math.min(PHYSICS.MAX_SPACING, PHYSICS.REST_SPACING + state.inputY * 0.8))
         : PHYSICS.REST_SPACING;
       
-      const prevSpacing = state.spacing;
       const stretchForce = (targetSpacing - state.spacing) * PHYSICS.SPRING_K;
       state.velSpacing = (state.velSpacing + stretchForce) * PHYSICS.DAMPING;
       state.spacing += state.velSpacing * dt;
 
-      if (!state.isTouching && prevSpacing > 120 && state.spacing < PHYSICS.REST_SPACING + 10) {
-        if (state.isReady) state.stability -= 1.5; 
-        state.shake = 5;
-      }
-
       const targetX = state.isTouching ? state.inputX : 0;
-      const moveK = state.isTouching ? 0.08 : PHYSICS.SNAP_STRENGTH;
+      const moveK = state.isTouching ? 0.05 : PHYSICS.SNAP_STRENGTH;
       const moveForce = (targetX - state.x) * moveK;
       state.velX = (state.velX + moveForce) * PHYSICS.DAMPING;
       state.x += state.velX * dt;
 
-      // GAMEPLAY LOGIC (SCROLLING, OBSTACLES) ONLY IF READY
       if (!state.isReady) return;
 
       state.gameTime += 16 * dt;
@@ -331,25 +328,32 @@ const GameView: React.FC<GameViewProps> = ({ onGameOver, skipTutorial = false })
         }
       });
 
-      const b1X = w/2 + state.x - state.spacing;
-      const b2X = w/2 + state.x + state.spacing;
+      const cxPlayer = w/2 + state.x;
+      const b1X = cxPlayer - state.spacing;
+      const b2X = cxPlayer + state.spacing;
       const pY = h * 0.82;
 
+      // Tether line
       const grad = ctx.createLinearGradient(b1X, pY, b2X, pY);
       grad.addColorStop(0, state.mirrorMode ? COLORS.MIRROR : COLORS.CYAN);
       grad.addColorStop(1, state.mirrorMode ? '#ffaa00' : COLORS.PINK);
       
       ctx.strokeStyle = grad;
-      ctx.lineWidth = 3 + Math.sin(Date.now() / 60) * 1.5;
+      ctx.lineWidth = 2 + Math.sin(Date.now() / 60) * 1.5;
       ctx.beginPath(); ctx.moveTo(b1X, pY); ctx.lineTo(b2X, pY); ctx.stroke();
 
-      ctx.shadowBlur = 20;
-      ctx.fillStyle = state.mirrorMode ? COLORS.MIRROR : COLORS.CYAN;
-      ctx.shadowColor = ctx.fillStyle as string;
+      ctx.shadowBlur = 15;
+      
+      // Drawing two distinct balls
+      const cyanColor = state.mirrorMode ? COLORS.MIRROR : COLORS.CYAN;
+      const pinkColor = state.mirrorMode ? '#ffaa00' : COLORS.PINK;
+      
+      ctx.fillStyle = cyanColor;
+      ctx.shadowColor = cyanColor;
       ctx.beginPath(); ctx.arc(b1X, pY, PHYSICS.BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
 
-      ctx.fillStyle = state.mirrorMode ? '#ffaa00' : COLORS.PINK;
-      ctx.shadowColor = ctx.fillStyle as string;
+      ctx.fillStyle = pinkColor;
+      ctx.shadowColor = pinkColor;
       ctx.beginPath(); ctx.arc(b2X, pY, PHYSICS.BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
 
       ctx.restore();
@@ -485,7 +489,6 @@ const GameView: React.FC<GameViewProps> = ({ onGameOver, skipTutorial = false })
             </div>
 
             <div className="grid grid-cols-2 gap-x-8 gap-y-12">
-              {/* MOVE */}
               <div className="flex flex-col items-center space-y-4">
                 <div className="h-20 w-full bg-white/5 rounded-2xl flex flex-col items-center justify-center relative overflow-hidden border border-white/5">
                   <div className="flex items-center space-x-2 animate-[slide_3s_infinite_ease-in-out]">
@@ -498,7 +501,6 @@ const GameView: React.FC<GameViewProps> = ({ onGameOver, skipTutorial = false })
                 <span className="text-[10px] font-bold text-white/60 uppercase tracking-widest">MOVE</span>
               </div>
 
-              {/* STRETCH */}
               <div className="flex flex-col items-center space-y-4">
                 <div className="h-20 w-full bg-white/5 rounded-2xl flex flex-col items-center justify-center relative overflow-hidden border border-white/5">
                   <div className="flex items-center justify-between animate-[stretch_3s_infinite_ease-in-out] px-2">
@@ -511,7 +513,6 @@ const GameView: React.FC<GameViewProps> = ({ onGameOver, skipTutorial = false })
                 <span className="text-[10px] font-bold text-white/60 uppercase tracking-widest">STRETCH</span>
               </div>
 
-              {/* CONTRACT */}
               <div className="flex flex-col items-center space-y-4">
                 <div className="h-20 w-full bg-white/5 rounded-2xl flex flex-col items-center justify-center relative overflow-hidden border border-white/5">
                   <div className="flex items-center justify-center animate-[contract_3s_infinite_ease-in-out]">
@@ -524,7 +525,6 @@ const GameView: React.FC<GameViewProps> = ({ onGameOver, skipTutorial = false })
                 <span className="text-[10px] font-bold text-white/60 uppercase tracking-widest">CONTRACT</span>
               </div>
 
-              {/* SNAP */}
               <div className="flex flex-col items-center space-y-4">
                 <div className="h-20 w-full bg-white/5 rounded-2xl flex flex-col items-center justify-center relative overflow-hidden border border-white/5">
                   <div className="w-[1px] h-full bg-white/10 absolute" />
@@ -563,6 +563,4 @@ const GameView: React.FC<GameViewProps> = ({ onGameOver, skipTutorial = false })
       </div>
     </div>
   );
-};
-
-export default GameView;
+}
