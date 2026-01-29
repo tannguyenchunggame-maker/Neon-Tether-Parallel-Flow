@@ -1,6 +1,6 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { PHYSICS, COLORS, INITIAL_STABILITY, STABILITY_LOSS_MINOR, STABILITY_LOSS_MAJOR, STABILITY_GAIN_PERFECT } from '../constants';
+import { PHYSICS, COLORS, INITIAL_STABILITY } from '../constants';
 import { Obstacle } from '../types';
 
 interface GameViewProps {
@@ -13,10 +13,11 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
   const containerRef = useRef<HTMLDivElement>(null);
   const [score, setScore] = useState(0);
   const [stability, setStability] = useState(INITIAL_STABILITY);
-  const [isMirror, setIsMirror] = useState(false);
   const [showTutorial, setShowTutorial] = useState(!skipTutorial);
   const [countdown, setCountdown] = useState<number | null>(null);
   
+  const NEEDLE_GAP = 110;
+
   const gameStateRef = useRef({
     x: 0,
     spacing: PHYSICS.REST_SPACING,
@@ -36,8 +37,6 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
     touchStartX: 0,
     touchStartY: 0,
     gameTime: 0,
-    mirrorMode: false,
-    mirrorTimeout: 0,
     currentStep: 0,
     isCountingDown: false,
     isReady: false 
@@ -48,54 +47,47 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
     const w = state.canvasWidth || window.innerWidth;
     const time = state.gameTime / 1000;
     
+    // Determine pool of obstacles
     let types: Obstacle['type'][] = ['NEEDLE', 'TWINS'];
-    if (time > 15) types.push('SPLITTER', 'WEAVER');
-    if (time > 90) types.push('PENDULUM', 'PHANTOM', 'PORTAL');
+    if (time > 10) types.push('ZIGZAG', 'DIAMOND');
+    if (time > 25) types.push('FUNNEL');
+    if (time > 45) types.push('SPLITTER', 'WEAVER');
 
     const type = types[Math.floor(Math.random() * types.length)];
-    
-    // STRICT CONSTANTS FOR GAPS (NO RANDOMNESS)
-    // Single sphere width is 24px. Two spheres touching is 48px.
-    // At rest, centers are 60px apart + 24px diameter = 84px total span.
-    const SINGLE_HOLE_GAP = 105; // Increased from 90px to provide more clearance for both spheres
-    const DOUBLE_HOLE_GAP = 45;  // Increased from 42px. Still < 48px to prevent two spheres passing through one hole.
-    const TWINS_HOLE_DISTANCE = 160; // Fixed distance between the two holes
     
     let obs: Obstacle = {
       id: Date.now() + Math.random(),
       y: y,
       type: type,
       width: w,
-      passed: false
+      passed: false,
+      timer: 0
     };
 
     if (type === 'NEEDLE') {
-      obs.gapCenter = (Math.random() - 0.5) * (w * 0.6);
-      obs.gapSize = SINGLE_HOLE_GAP;
+      obs.gapCenter = (Math.random() - 0.5) * (w * 0.5);
+      obs.gapSize = NEEDLE_GAP;
     } else if (type === 'TWINS') {
-      // The entire obstacle group can be offset, but the internal spacing is fixed
       const offset = (Math.random() - 0.5) * (w * 0.3);
-      obs.leftGapCenter = offset - TWINS_HOLE_DISTANCE / 2;
-      obs.rightGapCenter = offset + TWINS_HOLE_DISTANCE / 2;
-      obs.gapSize = DOUBLE_HOLE_GAP; 
+      obs.leftGapCenter = offset - 85;
+      obs.rightGapCenter = offset + 85;
+      obs.gapSize = 50; 
+    } else if (type === 'ZIGZAG') {
+      obs.height = 1400; 
+      obs.gapSize = 180; 
+      obs.gapCenter = (Math.random() - 0.5) * (w * 0.1);
+    } else if (type === 'FUNNEL') {
+      obs.height = 1000;
+      obs.gapCenter = 0; 
+      obs.funnelDir = Math.random() > 0.5 ? 'IN' : 'OUT';
+    } else if (type === 'DIAMOND') {
+      obs.gapSize = 120; 
+      obs.gapCenter = (Math.random() - 0.5) * (w * 0.3);
     } else if (type === 'SPLITTER') {
       obs.gapSize = w * 0.8; 
     } else if (type === 'WEAVER') {
-      obs.gapCenter = Math.sin(y / 200) * (w * 0.3);
-      obs.gapSize = SINGLE_HOLE_GAP;
-    } else if (type === 'PENDULUM') {
       obs.gapCenter = 0;
-      obs.gapSize = 180;
-      obs.angle = 0;
-      obs.rotSpeed = 0.05 + Math.random() * 0.05;
-    } else if (type === 'PHANTOM') {
-      obs.gapCenter = (Math.random() - 0.5) * (w * 0.5);
-      obs.gapSize = SINGLE_HOLE_GAP;
-      obs.isFake = Math.random() > 0.5;
-      obs.glitchTimer = 0;
-    } else if (type === 'PORTAL') {
-      obs.gapCenter = 0;
-      obs.gapSize = 120;
+      obs.gapSize = 115;
     }
 
     return obs;
@@ -116,22 +108,22 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
       gameStateRef.current.isCountingDown = true;
       let count = 3;
       setCountdown(count);
-      
       const timer = setInterval(() => {
         count--;
-        if (count > 0) {
-          setCountdown(count);
-        } else {
+        if (count > 0) setCountdown(count);
+        else {
           setCountdown(null);
           gameStateRef.current.isReady = true;
           gameStateRef.current.isCountingDown = false;
+          let currentY = -600;
           for (let i = 0; i < 5; i++) {
-            gameStateRef.current.obstacles.push(generateObstacle(-500 - i * 500));
+            const obs = generateObstacle(currentY);
+            gameStateRef.current.obstacles.push(obs);
+            currentY -= (obs.height || 0) + 900; 
           }
           clearInterval(timer);
         }
       }, 1000);
-      
       return () => clearInterval(timer);
     }
   }, [showTutorial]);
@@ -139,7 +131,6 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
   useEffect(() => {
     handleResize();
     window.addEventListener('resize', handleResize);
-    
     let animationFrame: number;
     const loop = (time: number) => {
       const dt = Math.min((time - gameStateRef.current.lastTime) / 16, 2);
@@ -157,115 +148,96 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
       const targetSpacing = state.isTouching 
         ? Math.max(PHYSICS.MIN_SPACING, Math.min(PHYSICS.MAX_SPACING, PHYSICS.REST_SPACING + state.inputY * 0.8))
         : PHYSICS.REST_SPACING;
-      
-      const stretchForce = (targetSpacing - state.spacing) * PHYSICS.SPRING_K;
-      state.velSpacing = (state.velSpacing + stretchForce) * PHYSICS.DAMPING;
+      state.velSpacing = (state.velSpacing + (targetSpacing - state.spacing) * PHYSICS.SPRING_K) * PHYSICS.DAMPING;
       state.spacing += state.velSpacing * dt;
 
       const targetX = state.isTouching ? state.inputX : 0;
-      const moveK = state.isTouching ? 0.05 : PHYSICS.SNAP_STRENGTH;
-      const moveForce = (targetX - state.x) * moveK;
-      state.velX = (state.velX + moveForce) * PHYSICS.DAMPING;
+      state.velX = (state.velX + (targetX - state.x) * (state.isTouching ? 0.05 : PHYSICS.SNAP_STRENGTH)) * PHYSICS.DAMPING;
       state.x += state.velX * dt;
 
       if (!state.isReady) return;
-
       state.gameTime += 16 * dt;
 
-      const baseSpeed = 3.0; 
-      const maxSpeed = baseSpeed * 3;
-      const introDuration = 30000;
-      const stepDuration = 15000;
-      const speedIncrement = 0.75;
-      
-      let steps = 0;
-      if (state.gameTime > introDuration) {
-        steps = 1 + Math.floor((state.gameTime - introDuration) / stepDuration);
-      }
-      
-      if (steps > state.currentStep) {
-        state.currentStep = steps;
-        const calculatedSpeed = baseSpeed + (steps * speedIncrement);
-        if (calculatedSpeed <= maxSpeed + speedIncrement) {
-          state.shake = 8; 
-        }
-      }
-
-      const calculatedSpeed = baseSpeed + (state.currentStep * speedIncrement);
-      const scrollSpeed = Math.min(maxSpeed, calculatedSpeed);
-      
+      state.currentStep = Math.floor(state.gameTime / 15000);
+      const scrollSpeed = Math.min(10.0, 4.0 + (state.currentStep * 0.45));
       state.distance += scrollSpeed * dt;
       setScore(Math.floor(state.distance / 10));
 
-      if (state.mirrorMode) {
-        state.mirrorTimeout -= 16 * dt;
-        if (state.mirrorTimeout <= 0) {
-          state.mirrorMode = false;
-          setIsMirror(false);
-          state.shake = 15;
-        }
-      }
-
       const playerY = state.canvasHeight * 0.82;
-      const collisionThreshold = 25;
+      const b1X = state.x - state.spacing;
+      const b2X = state.x + state.spacing;
 
       state.obstacles.forEach(obs => {
         obs.y += scrollSpeed * dt;
-        if (obs.type === 'PENDULUM' && obs.angle !== undefined) {
-          obs.angle += obs.rotSpeed! * dt;
-        }
-        if (obs.type === 'PHANTOM') {
-          obs.glitchTimer = (obs.glitchTimer || 0) + dt;
+        if (obs.timer !== undefined) obs.timer += dt;
+
+        let currentlyColliding = false;
+
+        if (obs.type === 'ZIGZAG' && playerY < obs.y && playerY > obs.y - obs.height!) {
+            const progress = (obs.y - playerY) / obs.height!;
+            const zigzagX = (obs.gapCenter || 0) + Math.sin(progress * Math.PI * 2) * (state.canvasWidth * 0.25);
+            const inL = Math.abs(b1X - zigzagX) < obs.gapSize! / 2;
+            const inR = Math.abs(b2X - zigzagX) < obs.gapSize! / 2;
+            if (!inL || !inR) currentlyColliding = true;
+        } else if (obs.type === 'FUNNEL' && playerY < obs.y && playerY > obs.y - obs.height!) {
+            const progress = (obs.y - playerY) / obs.height!;
+            const smallGap = NEEDLE_GAP;
+            const largeGap = state.canvasWidth - 140; // Approx NEEDLE_GAP margin per side as requested
+            
+            const currentGap = obs.funnelDir === 'IN' 
+              ? largeGap - (progress * (largeGap - smallGap)) 
+              : smallGap + (progress * (largeGap - smallGap));
+            
+            const gc = obs.gapCenter || 0;
+            const inL = Math.abs(b1X - gc) < currentGap / 2;
+            const inR = Math.abs(b2X - gc) < currentGap / 2;
+            if (!inL || !inR) currentlyColliding = true;
         }
 
-        if (!obs.passed && obs.y > playerY - collisionThreshold && obs.y < playerY + collisionThreshold) {
-          let collided = false;
-          const b1X = state.x - state.spacing;
-          const b2X = state.x + state.spacing;
-          
-          if (obs.type === 'NEEDLE' || obs.type === 'WEAVER' || obs.type === 'PHANTOM') {
-            if (obs.type === 'PHANTOM' && obs.isFake) {
-              collided = true;
-            } else {
-              const inL = Math.abs(b1X - (obs.gapCenter || 0)) < (obs.gapSize || 0) / 2;
-              const inR = Math.abs(b2X - (obs.gapCenter || 0)) < (obs.gapSize || 0) / 2;
-              if (!inL || !inR) collided = true;
+        const threshold = 25;
+        const isNearGate = obs.y > playerY - threshold && obs.y < playerY + threshold;
+        
+        if (isNearGate && !obs.passed) {
+            if (obs.type === 'NEEDLE' || obs.type === 'WEAVER') {
+              const gc = obs.type === 'WEAVER' ? Math.sin(obs.y / 200) * (state.canvasWidth * 0.3) : (obs.gapCenter || 0);
+              const inL = Math.abs(b1X - gc) < obs.gapSize! / 2;
+              const inR = Math.abs(b2X - gc) < obs.gapSize! / 2;
+              if (!inL || !inR) currentlyColliding = true;
+            } else if (obs.type === 'TWINS') {
+              const inL = Math.abs(b1X - (obs.leftGapCenter || 0)) < obs.gapSize! / 2;
+              const inR = Math.abs(b2X - (obs.rightGapCenter || 0)) < obs.gapSize! / 2;
+              if (!inL || !inR) currentlyColliding = true;
+            } else if (obs.type === 'DIAMOND') {
+              if (Math.abs(b1X - obs.gapCenter!) < obs.gapSize! / 2 || Math.abs(b2X - obs.gapCenter!) < obs.gapSize! / 2) currentlyColliding = true;
+            } else if (obs.type === 'SPLITTER') {
+              if (Math.abs(b1X) < 22 || Math.abs(b2X) < 22) currentlyColliding = true;
             }
-          } else if (obs.type === 'TWINS') {
-            const inL = Math.abs(b1X - (obs.leftGapCenter || 0)) < (obs.gapSize || 0) / 2;
-            const inR = Math.abs(b2X - (obs.rightGapCenter || 0)) < (obs.gapSize || 0) / 2;
-            if (!inL || !inR) collided = true;
-          } else if (obs.type === 'SPLITTER') {
-             if (Math.abs(b1X) < 15 || Math.abs(b2X) < 15) collided = true;
-          } else if (obs.type === 'PENDULUM') {
-            const barX = Math.sin(obs.angle!) * 100;
-            if (Math.abs(b1X - barX) < 20 || Math.abs(b2X - barX) < 20) collided = true;
-          } else if (obs.type === 'PORTAL') {
-            state.mirrorMode = true;
-            state.mirrorTimeout = 8000;
-            setIsMirror(true);
-            state.stability = Math.min(100, state.stability + 20);
-          }
+        }
 
-          if (collided && !state.mirrorMode) {
-            state.stability -= STABILITY_LOSS_MINOR;
-            state.shake = 12;
-            if (state.stability <= 0) onGameOver(Math.floor(state.distance / 10));
-          } else if (!collided) {
-            state.stability = Math.min(100, state.stability + (state.mirrorMode ? 2 : 0.5));
-          }
+        if (currentlyColliding) {
+          state.stability -= 1.8; 
+          state.shake = 10;
+          if (state.stability <= 0) onGameOver(Math.floor(state.distance / 10));
+        }
+
+        if (obs.y > playerY + 50 && !obs.passed) {
           obs.passed = true;
+          state.stability = Math.min(100, state.stability + 3);
         }
       });
 
-      state.obstacles = state.obstacles.filter(o => o.y < state.canvasHeight + 200);
-      if (state.obstacles.length < 6) {
+      state.obstacles = state.obstacles.filter(o => o.y < state.canvasHeight + 1500);
+      if (state.obstacles.length < 5) {
         let minY = 0;
-        state.obstacles.forEach(o => { if (o.y < minY) minY = o.y; });
-        state.obstacles.push(generateObstacle(minY - 500));
+        state.obstacles.forEach(o => { 
+          const topY = o.y - (o.height || 0);
+          if (topY < minY) minY = topY; 
+        });
+        const nextObs = generateObstacle(minY - 900);
+        state.obstacles.push(nextObs);
       }
 
-      setStability(Math.floor(state.stability));
+      setStability(Math.floor(Math.max(0, state.stability)));
       if (state.shake > 0) state.shake *= 0.85;
     };
 
@@ -275,56 +247,123 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
       const state = gameStateRef.current;
       const w = state.canvasWidth;
       const h = state.canvasHeight;
+      const cx = w / 2;
 
       ctx.clearRect(0, 0, w, h);
       ctx.save();
-      
       if (state.shake > 1) ctx.translate((Math.random() - 0.5) * state.shake, (Math.random() - 0.5) * state.shake);
 
-      ctx.strokeStyle = state.mirrorMode ? 'rgba(255, 0, 50, 0.1)' : 'rgba(255, 255, 255, 0.04)';
+      // Grid
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
       ctx.lineWidth = 1;
       for(let x=0; x<w; x+=50) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
       const gridY = (state.distance % 50);
       for(let y=gridY; y<h; y+=50) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
 
       state.obstacles.forEach(obs => {
-        ctx.fillStyle = state.mirrorMode ? 'rgba(255, 0, 0, 0.3)' : 'rgba(255, 255, 255, 0.15)';
-        const cx = w/2;
-        
-        if (obs.type === 'NEEDLE' || obs.type === 'WEAVER') {
-          const gc = cx + (obs.gapCenter || 0);
-          const gs = obs.gapSize || 80;
-          ctx.fillRect(0, obs.y - 5, gc - gs/2, 10);
-          ctx.fillRect(gc + gs/2, obs.y - 5, w - (gc + gs/2), 10);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+        ctx.lineWidth = 3;
+
+        if (obs.type === 'ZIGZAG') {
+            const fh = obs.height!;
+            const gs = obs.gapSize!;
+            
+            // Draw left edge
+            ctx.beginPath();
+            for (let i = 0; i <= 40; i++) {
+                const prog = i / 40;
+                const currY = obs.y - prog * fh;
+                const currX = cx + (obs.gapCenter || 0) + Math.sin(prog * Math.PI * 2) * (w * 0.25);
+                if (i === 0) ctx.moveTo(currX - gs / 2, currY);
+                else ctx.lineTo(currX - gs / 2, currY);
+            }
+            ctx.stroke();
+
+            // Draw right edge
+            ctx.beginPath();
+            for (let i = 0; i <= 40; i++) {
+                const prog = i / 40;
+                const currY = obs.y - prog * fh;
+                const currX = cx + (obs.gapCenter || 0) + Math.sin(prog * Math.PI * 2) * (w * 0.25);
+                if (i === 0) ctx.moveTo(currX + gs / 2, currY);
+                else ctx.lineTo(currX + gs / 2, currY);
+            }
+            ctx.stroke();
+            
+            // Subtle fill
+            ctx.fillStyle = 'rgba(13, 223, 242, 0.04)';
+            ctx.beginPath();
+            for (let i = 0; i <= 40; i++) {
+                const prog = i / 40;
+                const currY = obs.y - prog * fh;
+                const currX = cx + (obs.gapCenter || 0) + Math.sin(prog * Math.PI * 2) * (w * 0.25);
+                if (i === 0) ctx.moveTo(currX - gs / 2, currY);
+                else ctx.lineTo(currX - gs / 2, currY);
+            }
+            for (let i = 40; i >= 0; i--) {
+                const prog = i / 40;
+                const currY = obs.y - prog * fh;
+                const currX = cx + (obs.gapCenter || 0) + Math.sin(prog * Math.PI * 2) * (w * 0.25);
+                ctx.lineTo(currX + gs / 2, currY);
+            }
+            ctx.fill();
+        } else if (obs.type === 'FUNNEL') {
+            const fh = obs.height!;
+            const gc = cx + (obs.gapCenter || 0);
+            
+            const smallGap = NEEDLE_GAP;
+            const largeGap = w - 140; 
+
+            const startGap = obs.funnelDir === 'IN' ? largeGap : smallGap;
+            const endGap = obs.funnelDir === 'IN' ? smallGap : largeGap;
+
+            // Left edge
+            ctx.beginPath();
+            ctx.moveTo(gc - startGap/2, obs.y); 
+            ctx.lineTo(gc - endGap/2, obs.y - fh);
+            ctx.stroke();
+
+            // Right edge
+            ctx.beginPath();
+            ctx.moveTo(gc + startGap/2, obs.y); 
+            ctx.lineTo(gc + endGap/2, obs.y - fh);
+            ctx.stroke();
+            
+            // Fill
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.03)';
+            ctx.beginPath();
+            ctx.moveTo(gc - startGap/2, obs.y);
+            ctx.lineTo(gc - endGap/2, obs.y - fh);
+            ctx.lineTo(gc + endGap/2, obs.y - fh);
+            ctx.lineTo(gc + startGap/2, obs.y);
+            ctx.fill();
+        } else if (obs.type === 'DIAMOND') {
+            const sz = obs.gapSize!;
+            ctx.save();
+            ctx.translate(cx + obs.gapCenter!, obs.y);
+            ctx.rotate(Math.PI / 4);
+            ctx.strokeStyle = COLORS.PINK;
+            ctx.strokeRect(-sz/2, -sz/2, sz, sz);
+            ctx.fillStyle = 'rgba(255, 45, 85, 0.15)';
+            ctx.fillRect(-sz/2, -sz/2, sz, sz);
+            ctx.restore();
+        } else if (obs.type === 'NEEDLE' || obs.type === 'WEAVER') {
+            const gc = cx + (obs.type === 'WEAVER' ? Math.sin(obs.y / 200) * (w * 0.3) : (obs.gapCenter || 0));
+            const gs = obs.gapSize!;
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+            ctx.fillRect(0, obs.y - 6, gc - gs/2, 12);
+            ctx.fillRect(gc + gs/2, obs.y - 6, w, 12);
         } else if (obs.type === 'TWINS') {
-          const lc = cx + (obs.leftGapCenter || 0);
-          const rc = cx + (obs.rightGapCenter || 0);
-          const gs = obs.gapSize || 60;
-          ctx.fillRect(0, obs.y - 5, lc - gs/2, 10);
-          ctx.fillRect(lc + gs/2, obs.y - 5, rc - lc - gs, 10);
-          ctx.fillRect(rc + gs/2, obs.y - 5, w - (rc + gs/2), 10);
+            const lc = cx + obs.leftGapCenter!;
+            const rc = cx + obs.rightGapCenter!;
+            const gs = obs.gapSize!;
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+            ctx.fillRect(0, obs.y - 6, lc - gs/2, 12);
+            ctx.fillRect(lc + gs/2, obs.y - 6, rc - lc - gs, 12);
+            ctx.fillRect(rc + gs/2, obs.y - 6, w, 12);
         } else if (obs.type === 'SPLITTER') {
-          ctx.fillRect(cx - 4, obs.y - 200, 8, 400);
-        } else if (obs.type === 'PENDULUM') {
-          const barX = cx + Math.sin(obs.angle!) * 100;
-          ctx.fillRect(0, obs.y - 5, w, 10);
-          ctx.clearRect(cx - 90, obs.y - 6, 180, 12);
-          ctx.fillStyle = COLORS.PINK;
-          ctx.fillRect(barX - 20, obs.y - 15, 40, 30);
-        } else if (obs.type === 'PHANTOM') {
-          const isGlitched = obs.isFake && (Math.floor(obs.glitchTimer! * 10) % 2 === 0);
-          ctx.globalAlpha = isGlitched ? 0.05 : 0.3;
-          const gc = cx + (obs.gapCenter || 0);
-          const gs = obs.gapSize || 80;
-          ctx.fillRect(0, obs.y - 5, gc - gs/2, 10);
-          ctx.fillRect(gc + gs/2, obs.y - 5, w - (gc + gs/2), 10);
-          ctx.globalAlpha = 1;
-        } else if (obs.type === 'PORTAL') {
-          ctx.strokeStyle = COLORS.MIRROR;
-          ctx.lineWidth = 4;
-          ctx.strokeRect(cx - 60, obs.y - 20, 120, 40);
-          ctx.fillStyle = 'rgba(255, 0, 50, 0.1)';
-          ctx.fillRect(cx - 60, obs.y - 20, 120, 40);
+            ctx.fillStyle = COLORS.PINK;
+            ctx.fillRect(cx - 6, obs.y - 250, 12, 500);
         }
       });
 
@@ -332,29 +371,24 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
       const b1X = cxPlayer - state.spacing;
       const b2X = cxPlayer + state.spacing;
       const pY = h * 0.82;
-
-      // Tether line
-      const grad = ctx.createLinearGradient(b1X, pY, b2X, pY);
-      grad.addColorStop(0, state.mirrorMode ? COLORS.MIRROR : COLORS.CYAN);
-      grad.addColorStop(1, state.mirrorMode ? '#ffaa00' : COLORS.PINK);
       
+      const grad = ctx.createLinearGradient(b1X, pY, b2X, pY);
+      grad.addColorStop(0, COLORS.CYAN);
+      grad.addColorStop(1, COLORS.PINK);
       ctx.strokeStyle = grad;
-      ctx.lineWidth = 2 + Math.sin(Date.now() / 60) * 1.5;
+      ctx.lineWidth = 4;
       ctx.beginPath(); ctx.moveTo(b1X, pY); ctx.lineTo(b2X, pY); ctx.stroke();
 
-      ctx.shadowBlur = 15;
-      
-      // Drawing two distinct balls
-      const cyanColor = state.mirrorMode ? COLORS.MIRROR : COLORS.CYAN;
-      const pinkColor = state.mirrorMode ? '#ffaa00' : COLORS.PINK;
-      
-      ctx.fillStyle = cyanColor;
-      ctx.shadowColor = cyanColor;
-      ctx.beginPath(); ctx.arc(b1X, pY, PHYSICS.BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
-
-      ctx.fillStyle = pinkColor;
-      ctx.shadowColor = pinkColor;
-      ctx.beginPath(); ctx.arc(b2X, pY, PHYSICS.BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
+      const drawBall = (x: number, y: number, color: string) => {
+        ctx.save();
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = color;
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(x, y, PHYSICS.BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      };
+      drawBall(b1X, pY, COLORS.CYAN);
+      drawBall(b2X, pY, COLORS.PINK);
 
       ctx.restore();
     };
@@ -388,14 +422,10 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
     gameStateRef.current.inputY = 0;
   };
 
-  const closeTutorial = () => {
-    setShowTutorial(false);
-  };
-
   return (
     <div 
       ref={containerRef}
-      className={`relative w-full h-full bg-black overflow-hidden transition-all duration-700 ${isMirror ? 'invert' : ''}`}
+      className="relative w-full h-full bg-black overflow-hidden"
       onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
       onMouseDown={handleTouchStart} onMouseMove={handleTouchMove} onMouseUp={handleTouchEnd} onMouseLeave={handleTouchEnd}
     >
@@ -407,13 +437,12 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
             <span className="text-[10px] tracking-widest text-cyan/60 uppercase font-bold">Flow_Distance</span>
             <h2 className="text-white text-2xl font-bold font-mono leading-none tracking-tight">
               {score.toString().padStart(6, '0')}
-              {isMirror && <span className="text-pink ml-2 text-sm animate-pulse">x3</span>}
             </h2>
           </div>
           <div className="flex flex-col items-end">
              <span className="text-[10px] tracking-widest text-pink/60 uppercase font-bold">Stage</span>
              <h2 className="text-white text-lg font-bold font-mono uppercase">
-               {gameStateRef.current.gameTime < 30000 ? 'Level 1' : 'Level ' + (Math.floor((gameStateRef.current.gameTime - 30000) / 15000) + 2)}
+               Level {gameStateRef.current.currentStep + 1}
              </h2>
           </div>
         </div>
@@ -430,7 +459,7 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
       </div>
 
       {countdown !== null && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40 bg-black/20">
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
           <h1 className="text-9xl font-black italic text-cyan drop-shadow-[0_0_30px_#0ddff2] animate-ping">
             {countdown}
           </h1>
@@ -439,55 +468,22 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
 
       {showTutorial && (
         <div 
-          onClick={closeTutorial}
+          onClick={() => setShowTutorial(false)}
           className="absolute inset-0 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl transition-opacity duration-700 pointer-events-auto z-50"
         >
           <style>{`
-            @keyframes slide {
-              0%, 100% { transform: translateX(-30px); }
-              50% { transform: translateX(30px); }
-            }
-            @keyframes stretch {
-              0%, 100% { width: 40px; }
-              50% { width: 100px; }
-            }
-            @keyframes contract {
-              0%, 100% { width: 100px; }
-              50% { width: 30px; }
-            }
-            @keyframes snap {
-              0% { transform: translateX(-40px); opacity: 0; }
-              20% { transform: translateX(-40px); opacity: 1; }
-              60% { transform: translateX(0); opacity: 1; }
-              100% { transform: translateX(0); opacity: 0; }
-            }
-            @keyframes finger-slide {
-              0%, 100% { transform: translate(-20px, 10px); }
-              50% { transform: translate(20px, 10px); }
-            }
-            @keyframes finger-up {
-              0%, 100% { transform: translateY(20px); }
-              50% { transform: translateY(-20px); }
-            }
-            @keyframes finger-down {
-              0%, 100% { transform: translateY(-20px); }
-              50% { transform: translateY(20px); }
-            }
-            @keyframes finger-tap {
-              0% { opacity: 0; transform: scale(1.2); }
-              20% { opacity: 1; transform: scale(1); }
-              50% { opacity: 1; transform: scale(1); }
-              60% { opacity: 0; transform: scale(0.8); }
-              100% { opacity: 0; }
-            }
+            @keyframes slide { 0%, 100% { transform: translateX(-30px); } 50% { transform: translateX(30px); } }
+            @keyframes stretch { 0%, 100% { width: 40px; } 50% { width: 100px; } }
+            @keyframes contract { 0%, 100% { width: 100px; } 50% { width: 30px; } }
+            @keyframes finger-slide { 0%, 100% { transform: translate(-20px, 10px); } 50% { transform: translate(20px, 10px); } }
+            @keyframes finger-up { 0%, 100% { transform: translateY(20px); } 50% { transform: translateY(-20px); } }
+            @keyframes finger-down { 0%, 100% { transform: translateY(-20px); } 50% { transform: translateY(20px); } }
           `}</style>
-          
           <div className="w-full max-w-lg bg-white/5 border border-white/10 rounded-[2.5rem] p-8 space-y-12 relative shadow-2xl">
             <div className="text-center space-y-2">
               <h3 className="text-cyan text-xs font-bold tracking-[0.6em] uppercase animate-pulse">Neural Interface Link</h3>
               <p className="text-[10px] text-white/30 tracking-widest uppercase italic">Tap anywhere to sync</p>
             </div>
-
             <div className="grid grid-cols-2 gap-x-8 gap-y-12">
               <div className="flex flex-col items-center space-y-4">
                 <div className="h-20 w-full bg-white/5 rounded-2xl flex flex-col items-center justify-center relative overflow-hidden border border-white/5">
@@ -500,7 +496,6 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
                 </div>
                 <span className="text-[10px] font-bold text-white/60 uppercase tracking-widest">MOVE</span>
               </div>
-
               <div className="flex flex-col items-center space-y-4">
                 <div className="h-20 w-full bg-white/5 rounded-2xl flex flex-col items-center justify-center relative overflow-hidden border border-white/5">
                   <div className="flex items-center justify-between animate-[stretch_3s_infinite_ease-in-out] px-2">
@@ -512,7 +507,6 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
                 </div>
                 <span className="text-[10px] font-bold text-white/60 uppercase tracking-widest">STRETCH</span>
               </div>
-
               <div className="flex flex-col items-center space-y-4">
                 <div className="h-20 w-full bg-white/5 rounded-2xl flex flex-col items-center justify-center relative overflow-hidden border border-white/5">
                   <div className="flex items-center justify-center animate-[contract_3s_infinite_ease-in-out]">
@@ -524,20 +518,16 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
                 </div>
                 <span className="text-[10px] font-bold text-white/60 uppercase tracking-widest">CONTRACT</span>
               </div>
-
               <div className="flex flex-col items-center space-y-4">
                 <div className="h-20 w-full bg-white/5 rounded-2xl flex flex-col items-center justify-center relative overflow-hidden border border-white/5">
-                  <div className="w-[1px] h-full bg-white/10 absolute" />
-                  <div className="flex items-center space-x-2 animate-[snap_3s_infinite_cubic-bezier(0.34,1.56,0.64,1)]">
+                  <div className="flex items-center space-x-2">
                     <div className="size-3 rounded-full bg-cyan/80" />
                     <div className="size-3 rounded-full bg-pink/80" />
                   </div>
-                  <span className="material-symbols-outlined absolute text-white/40 text-lg animate-[finger-tap_3s_infinite]">back_hand</span>
                 </div>
-                <span className="text-[10px] font-bold text-white/60 uppercase tracking-widest text-center leading-tight text-pink">RELEASE TO RECENTER</span>
+                <span className="text-[10px] font-bold text-white/60 uppercase tracking-widest text-center leading-tight">RELEASE TO RECENTER</span>
               </div>
             </div>
-
             <div className="pt-4 flex flex-col items-center gap-6">
                <div className="h-[2px] w-full bg-white/5 rounded-full relative overflow-hidden">
                  <div className="h-full bg-gradient-to-r from-transparent via-cyan to-transparent animate-[loading_10s_linear]" style={{ animationDuration: '10s' }}></div>
@@ -550,17 +540,6 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
           </div>
         </div>
       )}
-
-      {stability < 40 && (
-        <div className="absolute inset-0 pointer-events-none mix-blend-screen opacity-20" 
-             style={{ backgroundImage: `url('https://www.transparenttextures.com/patterns/asfalt-dark.png')`, animation: 'glitch 0.15s infinite' }} />
-      )}
-      
-      <div className="absolute bottom-8 w-full flex justify-center px-8 pointer-events-none">
-        <div className="bg-white/5 backdrop-blur-md border border-white/10 p-2 rounded-lg opacity-40">
-           <span className="text-[8px] font-bold text-white/60 uppercase tracking-widest italic tracking-[0.2em]">NEON_TETHER // PARALLEL_FLOW</span>
-        </div>
-      </div>
     </div>
   );
 }
