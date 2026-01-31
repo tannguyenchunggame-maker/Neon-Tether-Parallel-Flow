@@ -17,7 +17,6 @@ export function generateObstacle(y: number, state: any): Obstacle {
   const timeMs = state.gameTime;
   const cx = w / 2;
   
-  // Define available challenge types based on game progress
   let types: Obstacle['type'][] = ['NEEDLE', 'TWINS'];
   if (timeMs > 5000) types.push('ZIGZAG', 'DIAMOND');
   if (timeMs > 8000) types.push('SPLITTER');
@@ -25,10 +24,8 @@ export function generateObstacle(y: number, state: any): Obstacle {
   if (timeMs > 12000) types.push('PENDULUM'); 
   if (timeMs > 15000) types.push('WEAVER');
 
-  // Chance to spawn Mirror Portal
   if (timeMs > state.nextMirrorSpawnTime && state.mirrorTime <= 0) {
     state.nextMirrorSpawnTime = Infinity;
-    
     const safeMargin = MIRROR_PORTAL_WIDTH / 2 + 10;
     const minX = -cx + safeMargin;
     const maxX = cx - safeMargin;
@@ -145,7 +142,6 @@ export function updateGameState(state: any, dt: number, onGameOver: (score: numb
   if (isMirrorMode) {
     state.mirrorTime -= dt;
     if (state.mirrorTime <= 0) {
-      // END OF MIRROR WORLD BONUS CALCULATION
       const mirrorBonus = (state.mirrorParticlesCollected || 0) * 800;
       if (mirrorBonus > 0) {
         state.bonusScore += mirrorBonus;
@@ -165,10 +161,8 @@ export function updateGameState(state: any, dt: number, onGameOver: (score: numb
   }
 
   state.currentStep = Math.floor(state.gameTime / 15000);
-  
   let scrollSpeed = Math.min(12, 4.8 + (state.currentStep * 0.6));
   if (isMirrorMode) scrollSpeed *= 2; 
-  
   const frameDist = scrollSpeed * dt;
   state.distance += frameDist;
 
@@ -176,8 +170,9 @@ export function updateGameState(state: any, dt: number, onGameOver: (score: numb
   state.currentScore += frameDist * pointsPerUnit;
 
   const playerY = state.canvasHeight * 0.82;
-  const b1X = state.x - state.spacing;
-  const b2X = state.x + state.spacing;
+  const b1X = state.x - state.spacing; // Relative to center
+  const b2X = state.x + state.spacing; // Relative to center
+  const R = PHYSICS.BALL_RADIUS;
   
   if (state.hitCooldown > 0) state.hitCooldown -= dt;
 
@@ -192,14 +187,18 @@ export function updateGameState(state: any, dt: number, onGameOver: (score: numb
 
     let currentlyColliding = false;
     let isInsideLongPath = false;
-    const isCrossingGate = Math.abs(obs.y - playerY) < (obs.height || 60);
+    
+    // REDUCED HIT WINDOW: From 60px down to 18px for thin lines (Needle, Twins, Splitter etc.)
+    const hitWindow = obs.height ? obs.height : 18; 
+    const isCrossingGate = Math.abs(obs.y - playerY) < hitWindow;
 
     if (obs.type === 'ZIGZAG' && playerY < obs.y && playerY > obs.y - obs.height!) {
         isInsideLongPath = true;
         const prog = (obs.y - playerY) / obs.height!;
         const idealX = (obs.gapCenter || 0) + Math.sin(prog * Math.PI * 2) * (state.canvasWidth * 0.22);
         const gs = obs.gapSize!; const igs = gs - (LANE_WIDTH * GAP_EXPANSION);
-        if (b1X < idealX - gs/2 || b1X > idealX - igs/2 || b2X < idealX + igs/2 || b2X > idealX + gs/2) currentlyColliding = true;
+        // Account for Radius R
+        if (b1X - R < idealX - gs/2 || b1X + R > idealX - igs/2 || b2X - R < idealX + igs/2 || b2X + R > idealX + gs/2) currentlyColliding = true;
     } else if (obs.type === 'FUNNEL' && playerY < obs.y && playerY > obs.y - obs.height!) {
         isInsideLongPath = true;
         const prog = (obs.y - playerY) / obs.height!;
@@ -207,24 +206,31 @@ export function updateGameState(state: any, dt: number, onGameOver: (score: numb
         const gs = obs.funnelDir === 'IN' ? largeGap - (prog * (largeGap - smallGap)) : smallGap + (prog * (largeGap - smallGap));
         const igs = gs - (LANE_WIDTH * GAP_EXPANSION); 
         const idealX = obs.gapCenter || 0;
-        if (b1X < idealX - gs/2 || b1X > idealX - igs/2 || b2X < idealX + igs/2 || b2X > idealX + gs/2) currentlyColliding = true;
+        if (b1X - R < idealX - gs/2 || b1X + R > idealX - igs/2 || b2X - R < idealX + igs/2 || b2X + R > idealX + gs/2) currentlyColliding = true;
     } else if (isCrossingGate && !obs.passed) {
         if (obs.type === 'NEEDLE' || obs.type === 'WEAVER') {
             const idealX = obs.type === 'WEAVER' ? Math.sin(obs.y / 200) * (state.canvasWidth * 0.3) : (obs.gapCenter || 0);
-            if (b1X < idealX - obs.gapSize!/2 || b2X > idealX + obs.gapSize!/2) currentlyColliding = true;
+            // Must be within [idealX - gs/2, idealX + gs/2]
+            if (b1X - R < idealX - obs.gapSize!/2 || b2X + R > idealX + obs.gapSize!/2) currentlyColliding = true;
         } else if (obs.type === 'TWINS') {
-            if (Math.abs(b1X - obs.leftGapCenter!) >= obs.gapSize!/2 || Math.abs(b2X - obs.rightGapCenter!) >= obs.gapSize!/2) currentlyColliding = true;
+            // Ball 1 in left gap, Ball 2 in right gap
+            const lLimit = obs.leftGapCenter!; const rLimit = obs.rightGapCenter!;
+            const halfGs = obs.gapSize! / 2;
+            if (Math.abs(b1X - lLimit) + R > halfGs || Math.abs(b2X - rLimit) + R > halfGs) currentlyColliding = true;
         } else if (obs.type === 'DIAMOND') {
             const gc = obs.gapCenter || 0; const gs = obs.gapSize || 140;
-            const b1Dist = (Math.abs(b1X - gc) / (gs/2) + Math.abs(obs.y - playerY) / (gs/2));
-            const b2Dist = (Math.abs(b2X - gc) / (gs/2) + Math.abs(obs.y - playerY) / (gs/2));
-            if (b1Dist < 1.05 || b2Dist < 1.05) currentlyColliding = true;
+            const halfGs = gs / 2;
+            const b1Dist = (Math.abs(b1X - gc) / halfGs + Math.abs(obs.y - playerY) / halfGs);
+            const b2Dist = (Math.abs(b2X - gc) / halfGs + Math.abs(obs.y - playerY) / halfGs);
+            // Slightly strict threshold for diamond (0.9 instead of 1.05)
+            if (b1Dist < 0.9 || b2Dist < 0.9) currentlyColliding = true;
         } else if (obs.type === 'SPLITTER') {
             const gc = obs.gapCenter || 0; const gs = obs.gapSize || 165;
-            const br = PHYSICS.BALL_RADIUS;
-            if ((b1X > gc - gs/2 - br && b1X < gc + gs/2 + br) || (b2X > gc - gs/2 - br && b2X < gc + gs/2 + br)) {
-              currentlyColliding = true;
-            }
+            // Splitter is a central block. Collide if any ball is in the block zone.
+            const halfGs = gs / 2;
+            const b1InBlock = (b1X + R > gc - halfGs && b1X - R < gc + halfGs);
+            const b2InBlock = (b2X + R > gc - halfGs && b2X - R < gc + halfGs);
+            if (b1InBlock || b2InBlock) currentlyColliding = true;
         } else if (obs.type === 'PENDULUM') {
             const pivotX = obs.gapCenter || 0;
             const pivotY = obs.y - 300;
@@ -234,21 +240,18 @@ export function updateGameState(state: any, dt: number, onGameOver: (score: numb
             const orbRadius = obs.gapSize || 60;
             const d1 = Math.sqrt((b1X - orbX)**2 + (playerY - orbY)**2);
             const d2 = Math.sqrt((b2X - orbX)**2 + (playerY - orbY)**2);
-            if (d1 < orbRadius + PHYSICS.BALL_RADIUS || d2 < orbRadius + PHYSICS.BALL_RADIUS) {
-              currentlyColliding = true;
-            }
+            if (d1 < orbRadius + R || d2 < orbRadius + R) currentlyColliding = true;
         } else if (obs.type === 'MIRROR_PORTAL') {
             const gc = (obs.gapCenter || 0);
             const rw = obs.gapSize || MIRROR_PORTAL_WIDTH;
             const rh = obs.height || MIRROR_PORTAL_HEIGHT;
-            const halfW = rw / 2;
-            const halfH = rh / 2;
+            const halfW = rw / 2; const halfH = rh / 2;
             const b1Inside = (b1X >= gc - halfW && b1X <= gc + halfW && playerY >= obs.y - halfH && playerY <= obs.y + halfH);
             const b2Inside = (b2X >= gc - halfW && b2X <= gc + halfW && playerY >= obs.y - halfH && playerY <= obs.y + halfH);
             if (b1Inside && b2Inside) {
                if (!state.mirrorTime || state.mirrorTime <= 0) {
                   state.mirrorTime = MIRROR_DURATION;
-                  state.mirrorParticlesCollected = 0; // RESET COUNTER
+                  state.mirrorParticlesCollected = 0;
                   setIsMirrorActive(true);
                   state.floatingTexts.push({ id: Date.now(), x: state.canvasWidth / 2 + state.x, y: playerY - 100, text: "MIRROR LINK ACTIVATED", color: COLORS.MIRROR_PRIMARY, life: 1.5 });
                }
@@ -266,9 +269,7 @@ export function updateGameState(state: any, dt: number, onGameOver: (score: numb
           if (d1 < 25 || d2 < 25) { 
             p.collected = true; 
             state.bonusScore += (isMirrorMode ? 100 : 50); 
-            if (isMirrorMode) {
-              state.mirrorParticlesCollected = (state.mirrorParticlesCollected || 0) + 1;
-            }
+            if (isMirrorMode) state.mirrorParticlesCollected = (state.mirrorParticlesCollected || 0) + 1;
           }
         }
       });
@@ -276,21 +277,16 @@ export function updateGameState(state: any, dt: number, onGameOver: (score: numb
       obs.resonance = (collectedCount / (obs.totalParticles || 1)) * 100;
     }
 
-    // HIT LOGIC
     if (currentlyColliding && obs.type !== 'MIRROR_PORTAL') {
       if (isMirrorMode) {
-        // Phase Shift: No stability loss, just visual feedback
         if (state.hitCooldown <= 0) {
-           state.shake = 15; 
-           state.glitchIntensity = 0.8;
-           state.hitCooldown = 15;
+           state.shake = 15; state.glitchIntensity = 0.8; state.hitCooldown = 15;
            state.floatingTexts.push({ id: Date.now(), x: state.canvasWidth / 2 + state.x, y: playerY - 60, text: "PHASE SHIFT", color: COLORS.MIRROR_PRIMARY, life: 0.6 });
         }
       } else {
-        // Normal Mode: Deduct Stability
         if (state.hitCooldown <= 0) {
           state.stability -= STABILITY_LOSS_PER_HIT;
-          state.shake = 22; state.hitCooldown = 30; 
+          state.shake = 22; state.hitCooldown = 25; 
           const newHitCount = (obs.hitCount || 0) + 1;
           obs.hitCount = newHitCount;
           const isLong = obs.type === 'ZIGZAG' || obs.type === 'FUNNEL';
@@ -309,38 +305,25 @@ export function updateGameState(state: any, dt: number, onGameOver: (score: numb
     if (obs.y - (obs.height || 0) > playerY + 80 && !obs.passed) {
       obs.passed = true;
       if (obs.type === 'MIRROR_PORTAL') {
-          if (state.mirrorTime <= 0) {
-             state.nextMirrorSpawnTime = state.gameTime + 15000 + Math.random() * 15000;
-          }
+          if (state.mirrorTime <= 0) state.nextMirrorSpawnTime = state.gameTime + 15000 + Math.random() * 15000;
           return;
       }
-
       const hitCount = obs.hitCount || 0;
       const isLongChallenge = obs.type === 'ZIGZAG' || obs.type === 'FUNNEL';
       let totalGain = 0; let feedbackText = ""; let showText = false;
-      
-      // Calculate Score Bonus (Always happens)
       if (hitCount === 0 && (obs.resonance || 0) >= 90) {
           const scoreGain = PERFECT_BONUS_SCORE * (isMirrorMode ? 2 : 1);
           feedbackText = `PERFECT SQUEEZE +${scoreGain}`;
           state.bonusScore += scoreGain;
           showText = true;
       }
-
-      // Calculate Stability Gain (Only if NOT in Mirror Mode)
       if (!isMirrorMode) {
         if (hitCount === 0) {
-          if ((obs.resonance || 0) >= 90) {
-             totalGain = isLongChallenge ? STABILITY_PERFECT_LONG : STABILITY_PERFECT_NORMAL;
-          } else {
-             totalGain = isLongChallenge ? STABILITY_GAIN_LONG_PASS : STABILITY_GAIN_NORMAL_PASS;
-          }
-        } else if (hitCount === 1 && isLongChallenge) {
-          totalGain = STABILITY_GAIN_LONG_PASS;
-        }
+          if ((obs.resonance || 0) >= 90) totalGain = isLongChallenge ? STABILITY_PERFECT_LONG : STABILITY_PERFECT_NORMAL;
+          else totalGain = isLongChallenge ? STABILITY_GAIN_LONG_PASS : STABILITY_GAIN_NORMAL_PASS;
+        } else if (hitCount === 1 && isLongChallenge) totalGain = STABILITY_GAIN_LONG_PASS;
         if (totalGain > 0) state.stability = Math.min(100, state.stability + totalGain);
       }
-      
       if (showText) state.floatingTexts.push({ id: Date.now(), x: state.canvasWidth / 2 + state.x, y: playerY - 140, text: feedbackText, color: COLORS.GOLD, life: 1.2 });
     }
   });
