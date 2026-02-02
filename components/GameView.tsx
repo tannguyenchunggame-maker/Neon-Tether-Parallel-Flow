@@ -3,15 +3,19 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { PHYSICS, COLORS, INITIAL_STABILITY, MIRROR_DURATION, MIRROR_PORTAL_WIDTH, MIRROR_PORTAL_HEIGHT, MIRROR_SPAWN_START_TIME } from '../constants';
 import { Obstacle } from '../types';
 import { generateObstacle, updateGameState, LANE_WIDTH, GAP_EXPANSION } from '../gameLogic';
+import { audioManager } from '../utils/audioManager';
+import { SeededRandom, generateSeed } from '../utils/random';
 
 interface GameViewProps {
-  onGameOver: (score: number) => void;
+  onGameOver: (score: number, stats: any, seed: number) => void;
   skipTutorial?: boolean;
+  initialSeed?: number;
 }
 
-export default function GameView({ onGameOver, skipTutorial = false }: GameViewProps) {
+export default function GameView({ onGameOver, skipTutorial = false, initialSeed }: GameViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const isGameOverCalled = useRef(false);
   const [score, setScore] = useState(0);
   const [stability, setStability] = useState(INITIAL_STABILITY);
   const [resonanceHUD, setResonanceHUD] = useState(0);
@@ -32,7 +36,15 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
     mirrorTime: 0, 
     mirrorParticlesCollected: 0,
     nextMirrorSpawnTime: MIRROR_SPAWN_START_TIME + Math.random() * 10000, 
-    glitchIntensity: 0
+    glitchIntensity: 0,
+    totalHits: 0,
+    totalCollections: 0,
+    totalPerfects: 0,
+    lastHitCount: 0,
+    lastParticleCount: 0,
+    lastPerfectCount: 0,
+    seed: initialSeed ?? generateSeed(),
+    rng: null as any
   });
 
   const handleResize = useCallback(() => {
@@ -43,11 +55,19 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
     }
   }, []);
 
+  const handleGameOver = useCallback((finalScore: number, finalStats: any) => {
+    if (isGameOverCalled.current) return;
+    isGameOverCalled.current = true;
+    gameStateRef.current.isPaused = true;
+    onGameOver(finalScore, finalStats, gameStateRef.current.seed);
+  }, [onGameOver]);
+
   const triggerMirrorActive = (val: boolean) => {
     setIsMirrorActive(val);
     if (val) {
       gameStateRef.current.glitchIntensity = 1.0;
       gameStateRef.current.mirrorParticlesCollected = 0;
+      audioManager.playPortal();
     }
   };
 
@@ -62,15 +82,22 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
 
   useEffect(() => {
     if (!showTutorial && !gameStateRef.current.isReady && !gameStateRef.current.isCountingDown) {
+      audioManager.resume(); 
       gameStateRef.current.isCountingDown = true;
+      gameStateRef.current.rng = new SeededRandom(gameStateRef.current.seed);
+
       let count = 3; setCountdown(count);
       const timer = setInterval(() => {
         count--;
-        if (count > 0) setCountdown(count);
+        if (count > 0) {
+          setCountdown(count);
+          audioManager.playCollect(); 
+        }
         else {
           setCountdown(null);
           gameStateRef.current.isReady = true;
           gameStateRef.current.isCountingDown = false;
+          audioManager.playPortal(); 
           let currentY = -600;
           for (let i = 0; i < 5; i++) {
             const obs = generateObstacle(currentY, gameStateRef.current);
@@ -92,8 +119,9 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
     const loop = (time: number) => {
       const dt = Math.min((time - gameStateRef.current.lastTime) / 16, 2);
       gameStateRef.current.lastTime = time;
+      
       if (!gameStateRef.current.isPaused) {
-        updateGameState(gameStateRef.current, dt, onGameOver, triggerMirrorActive);
+        updateGameState(gameStateRef.current, dt, handleGameOver, triggerMirrorActive);
         
         const state = gameStateRef.current;
         setScore(Math.floor(state.currentScore + state.bonusScore));
@@ -104,6 +132,27 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
 
         if (state.shake > 0) state.shake *= 0.9;
         if (state.glitchIntensity > 0) state.glitchIntensity -= 0.05 * dt;
+
+        audioManager.update(state.spacing, state.mirrorTime > 0, state.gameTime);
+
+        if (state.totalCollections > state.lastParticleCount) {
+          audioManager.playCollect();
+          state.lastParticleCount = state.totalCollections;
+        }
+
+        if (state.totalHits > state.lastHitCount) {
+          audioManager.playHit();
+          state.lastHitCount = state.totalHits;
+        }
+
+        state.obstacles.forEach(o => {
+          if (o.passed && !o.wasHit && (o.resonance || 0) >= 90 && o.type !== 'MIRROR_PORTAL') {
+             if (!(o as any).perfectSoundPlayed) {
+               audioManager.playPerfect();
+               (o as any).perfectSoundPlayed = true;
+             }
+          }
+        });
         
         draw();
       }
@@ -151,18 +200,19 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
 
         if (obs.type === 'ZIGZAG') {
             const fh = obs.height!; const gs = obs.gapSize!; const igs = gs - (LANE_WIDTH * GAP_EXPANSION);
+            const amplitude = w * 0.18;
             ctx.strokeStyle = palette.primary; ctx.shadowColor = palette.primary;
             ctx.beginPath();
             for (let i = 0; i <= 60; i++) {
                 const prog = i / 60; const currY = obs.y - prog * fh;
-                const currX = cx + (obs.gapCenter || 0) + Math.sin(prog * Math.PI * 2) * (w * 0.22);
+                const currX = cx + (obs.gapCenter || 0) + Math.sin(prog * Math.PI * 2) * amplitude;
                 if (i === 0) ctx.moveTo(currX - gs / 2, currY); else ctx.lineTo(currX - gs / 2, currY);
             }
             ctx.stroke();
             ctx.beginPath();
             for (let i = 0; i <= 60; i++) {
                 const prog = i / 60; const currY = obs.y - prog * fh;
-                const currX = cx + (obs.gapCenter || 0) + Math.sin(prog * Math.PI * 2) * (w * 0.22);
+                const currX = cx + (obs.gapCenter || 0) + Math.sin(prog * Math.PI * 2) * amplitude;
                 if (i === 0) ctx.moveTo(currX + gs / 2, currY); else ctx.lineTo(currX + gs / 2, currY);
             }
             ctx.stroke();
@@ -170,14 +220,14 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
             ctx.beginPath();
             for (let i = 0; i <= 60; i++) {
                 const prog = i / 60; const currY = obs.y - prog * fh;
-                const currX = cx + (obs.gapCenter || 0) + Math.sin(prog * Math.PI * 2) * (w * 0.22);
+                const currX = cx + (obs.gapCenter || 0) + Math.sin(prog * Math.PI * 2) * amplitude;
                 if (i === 0) ctx.moveTo(currX - igs / 2, currY); else ctx.lineTo(currX - igs / 2, currY);
             }
             ctx.stroke();
             ctx.beginPath();
             for (let i = 0; i <= 60; i++) {
                 const prog = i / 60; const currY = obs.y - prog * fh;
-                const currX = cx + (obs.gapCenter || 0) + Math.sin(prog * Math.PI * 2) * (w * 0.22);
+                const currX = cx + (obs.gapCenter || 0) + Math.sin(prog * Math.PI * 2) * amplitude;
                 if (i === 0) ctx.moveTo(currX + igs / 2, currY); else ctx.lineTo(currX + igs / 2, currY);
             }
             ctx.stroke();
@@ -204,8 +254,9 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
             ctx.beginPath(); ctx.moveTo(lc + gs/2, obs.y); ctx.lineTo(rc - gs/2, obs.y); ctx.stroke();
         } else if (obs.type === 'DIAMOND') {
             const gc = cx + (obs.gapCenter || 0); const gs = obs.gapSize || 140;
+            const halfGs = gs / 2;
             ctx.strokeStyle = palette.secondary; ctx.shadowColor = palette.secondary;
-            ctx.beginPath(); ctx.moveTo(gc, obs.y - gs/2); ctx.lineTo(gc + gs/2, obs.y); ctx.lineTo(gc, obs.y + gs/2); ctx.lineTo(gc - gs/2, obs.y); ctx.closePath(); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(gc, obs.y - halfGs); ctx.lineTo(gc + halfGs, obs.y); ctx.lineTo(gc, obs.y + halfGs); ctx.lineTo(gc - halfGs, obs.y); ctx.closePath(); ctx.stroke();
         } else if (obs.type === 'SPLITTER') {
             const gc = cx + (obs.gapCenter || 0); const gs = obs.gapSize || 165;
             const hBlock = 50; 
@@ -227,7 +278,7 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
         } else if (obs.type === 'PENDULUM') {
             const gc = cx + (obs.gapCenter || 0);
             const pivotY = obs.y - 300;
-            const length = 320;
+            const length = w * 0.35;
             const orbX = gc + Math.sin(obs.angle || 0) * length;
             const orbY = pivotY + Math.cos(obs.angle || 0) * length;
             const orbR = obs.gapSize || 60;
@@ -246,14 +297,11 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
             const gc = cx + (obs.gapCenter || 0);
             const rw = MIRROR_PORTAL_WIDTH;
             const rh = MIRROR_PORTAL_HEIGHT;
-            
             ctx.save();
             ctx.lineWidth = 3;
             ctx.strokeStyle = COLORS.MIRROR_PRIMARY;
             ctx.shadowColor = COLORS.MIRROR_PRIMARY;
             ctx.shadowBlur = 20;
-            
-            // Draw Main Square Frame (Bo góc nhẹ)
             const radius = 12;
             ctx.beginPath();
             ctx.moveTo(gc - rw/2 + radius, obs.y - rh/2);
@@ -267,13 +315,9 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
             ctx.quadraticCurveTo(gc - rw/2, obs.y - rh/2, gc - rw/2 + radius, obs.y - rh/2);
             ctx.closePath();
             ctx.stroke();
-
-            // Background Fill
             ctx.globalAlpha = 0.08;
             ctx.fillStyle = COLORS.MIRROR_PRIMARY;
             ctx.fill();
-
-            // Center Circle Energy (Mockup Style)
             ctx.globalAlpha = 1.0;
             const p = Math.abs(Math.sin(state.gameTime / 300));
             ctx.strokeStyle = COLORS.MIRROR_PRIMARY;
@@ -281,21 +325,17 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
             ctx.beginPath();
             ctx.arc(gc, obs.y - 5, 20 + p * 5, 0, Math.PI * 2);
             ctx.stroke();
-            
             ctx.globalAlpha = 0.4 + p * 0.4;
             ctx.shadowBlur = 15;
             ctx.beginPath();
             ctx.arc(gc, obs.y - 5, 12, 0, Math.PI * 2);
             ctx.stroke();
-
-            // Text inside Square
             ctx.globalAlpha = 0.8;
             ctx.fillStyle = COLORS.MIRROR_PRIMARY;
             ctx.font = 'bold 11px monospace';
             ctx.textAlign = 'center';
             ctx.shadowBlur = 5;
             ctx.fillText("ENTER_GATE", gc, obs.y + rh/2 - 20);
-            
             ctx.restore();
         }
 
@@ -320,14 +360,16 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
       ctx.strokeStyle = grad; ctx.lineWidth = 3; ctx.globalAlpha = 0.75;
       ctx.beginPath(); ctx.moveTo(b1X, pY); ctx.lineTo(b2X, pY); ctx.stroke(); ctx.restore();
 
-      const drawBall = (x: number, y: number, color: string) => {
+      const drawBall = (x: number, y: number, color: string, coreColor: string) => {
         ctx.save(); 
         if (isMirror) ctx.globalAlpha = 0.5 + Math.sin(state.gameTime / 100) * 0.2;
         ctx.shadowBlur = 25; ctx.shadowColor = color;
         ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, PHYSICS.BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = palette.secondary; ctx.beginPath(); ctx.arc(x, y, PHYSICS.BALL_RADIUS * 0.4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+        ctx.fillStyle = coreColor; ctx.beginPath(); ctx.arc(x, y, PHYSICS.BALL_RADIUS * 0.4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
       };
-      drawBall(b1X, pY, palette.ball1); drawBall(b2X, pY, palette.ball2);
+      
+      drawBall(b1X, pY, palette.ball1, palette.ball2); 
+      drawBall(b2X, pY, palette.ball2, palette.ball1);
 
       state.floatingTexts.forEach(ft => {
         ctx.save(); ctx.globalAlpha = ft.life; ctx.fillStyle = ft.color;
@@ -351,9 +393,11 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
 
     animationFrame = requestAnimationFrame(loop);
     return () => { cancelAnimationFrame(animationFrame); window.removeEventListener('resize', handleResize); };
-  }, [onGameOver, handleResize, showTutorial]);
+  }, [handleGameOver, handleResize, showTutorial]);
 
   const handleTouchStart = (e: React.TouchEvent | React.MouseEvent) => {
+    audioManager.resume();
+    if (gameStateRef.current.isPaused) return;
     gameStateRef.current.isTouching = true;
     const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
     const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
@@ -361,7 +405,7 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
   };
 
   const handleTouchMove = (e: React.TouchEvent | React.MouseEvent) => {
-    if (!gameStateRef.current.isTouching) return;
+    if (!gameStateRef.current.isTouching || gameStateRef.current.isPaused) return;
     const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
     const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
     gameStateRef.current.inputX = clientX - gameStateRef.current.touchStartX;
@@ -382,14 +426,12 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
       <canvas ref={canvasRef} className="w-full h-full" />
       
       <div className="absolute top-0 left-0 w-full p-6 flex flex-col pointer-events-none">
-        {/* TOP HUD */}
         <div className="flex justify-between items-start mb-6">
           <div className="flex flex-col">
-            <span className={`text-[10px] tracking-widest uppercase font-bold ${isMirrorActive ? 'text-white/40' : 'text-cyan/60'}`}>Flow_Distance</span>
+            <span className={`text-[10px] tracking-widest uppercase font-bold ${isMirrorActive ? 'text-white/40' : 'text-cyan/60'}`}>Flow Distance</span>
             <h2 className={`text-2xl font-bold font-mono leading-none tracking-tight text-white`}>{score.toString().padStart(6, '0')}</h2>
           </div>
 
-          {/* MIRROR SHARD HUD */}
           {isMirrorActive && (
             <div className="absolute left-1/2 -translate-x-1/2 top-4 flex flex-col items-center">
                <div className="flex items-center gap-2 bg-white/5 border border-white/10 px-4 py-2 rounded-full backdrop-blur-md">
@@ -415,7 +457,6 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
           </div>
         </div>
         
-        {/* CENTER STATS */}
         <div className="flex flex-col gap-4 w-full max-w-xs mx-auto">
           <div className="flex flex-col gap-1">
             <div className="flex justify-between items-end px-1">
@@ -480,9 +521,13 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
               <div className="flex flex-col items-center space-y-4">
                 <div className="h-24 w-full bg-[#1a1a1a] rounded-2xl flex flex-col items-center justify-center relative overflow-hidden border border-white/5">
                   <div className="flex items-center space-x-2 animate-[slide_3s_infinite_ease-in-out]">
-                    <div className="size-3 rounded-full bg-cyan shadow-[0_0_8px_#0ddff2]" />
+                    <div className="size-3 rounded-full bg-cyan shadow-[0_0_8px_#0ddff2] flex items-center justify-center">
+                       <div className="size-1 rounded-full bg-pink"></div>
+                    </div>
                     <div className="w-8 h-[2px] bg-white/20" />
-                    <div className="size-3 rounded-full bg-pink shadow-[0_0_8px_#ff2d55]" />
+                    <div className="size-3 rounded-full bg-pink shadow-[0_0_8px_#ff2d55] flex items-center justify-center">
+                       <div className="size-1 rounded-full bg-cyan"></div>
+                    </div>
                   </div>
                   <span className="material-symbols-outlined absolute text-white/40 text-lg animate-[finger-slide_3s_infinite_ease-in-out]">touch_app</span>
                 </div>
@@ -492,9 +537,13 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
               <div className="flex flex-col items-center space-y-4">
                 <div className="h-24 w-full bg-[#1a1a1a] rounded-2xl flex flex-col items-center justify-center relative overflow-hidden border border-white/5">
                   <div className="flex items-center justify-between animate-[stretch-contract_4s_infinite_ease-in-out] px-2">
-                    <div className="size-3 rounded-full bg-cyan shadow-[0_0_8px_#0ddff2]" />
+                    <div className="size-3 rounded-full bg-cyan shadow-[0_0_8px_#0ddff2] flex items-center justify-center">
+                       <div className="size-1 rounded-full bg-pink"></div>
+                    </div>
                     <div className="flex-1 h-[1px] bg-white/20 mx-1" />
-                    <div className="size-3 rounded-full bg-pink shadow-[0_0_8px_#ff2d55]" />
+                    <div className="size-3 rounded-full bg-pink shadow-[0_0_8px_#ff2d55] flex items-center justify-center">
+                       <div className="size-1 rounded-full bg-cyan"></div>
+                    </div>
                   </div>
                   <span className="material-symbols-outlined absolute text-white/40 text-lg animate-[finger-up-down_4s_infinite_ease-in-out]">touch_app</span>
                 </div>
@@ -503,12 +552,10 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
 
               <div className="flex flex-col items-center space-y-4">
                 <div className="h-24 w-full bg-[#1a1a1a] rounded-2xl flex flex-col items-center justify-center relative overflow-hidden border border-white/5">
-                  {/* Square with Circle Design (Synchronized with Gameplay) */}
                   <div className="size-16 rounded-xl border-2 border-cyan/40 flex flex-col items-center justify-center relative">
                     <div className="size-6 rounded-full border border-cyan shadow-[0_0_15px_#0ddff2] animate-[portal-pulse_1.5s_infinite]" />
                     <div className="absolute bottom-1.5 text-[7px] font-black text-cyan uppercase tracking-tighter">Enter_Gate</div>
                   </div>
-                  {/* Floating Balls Passing Through */}
                   <div className="absolute flex items-center space-x-1 animate-[mirror-portal-demo_3s_infinite_ease-in-out]">
                     <div className="size-1.5 rounded-full bg-cyan" />
                     <div className="size-1.5 rounded-full bg-pink" />
@@ -520,8 +567,12 @@ export default function GameView({ onGameOver, skipTutorial = false }: GameViewP
               <div className="flex flex-col items-center space-y-4">
                 <div className="h-24 w-full bg-[#1a1a1a] rounded-2xl flex flex-col items-center justify-center relative overflow-hidden border border-white/5">
                   <div className="flex items-center space-x-2 animate-[recenter-demo_2s_infinite_cubic-bezier(0.175,0.885,0.32,1.275)]">
-                    <div className="size-3 rounded-full bg-cyan shadow-[0_0_5px_#0ddff2]" />
-                    <div className="size-3 rounded-full bg-pink shadow-[0_0_5px_#ff2d55]" />
+                    <div className="size-3 rounded-full bg-cyan shadow-[0_0_5px_#0ddff2] flex items-center justify-center">
+                       <div className="size-1 rounded-full bg-pink"></div>
+                    </div>
+                    <div className="size-3 rounded-full bg-pink shadow-[0_0_5px_#ff2d55] flex items-center justify-center">
+                       <div className="size-1 rounded-full bg-cyan"></div>
+                    </div>
                   </div>
                 </div>
                 <span className="text-[10px] font-bold text-white/60 uppercase tracking-widest text-center leading-tight">RELEASE TO RECENTER</span>

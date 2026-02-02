@@ -10,7 +10,83 @@ export const COLORS = {
   MIRROR_BG: '#050a10',
   MIRROR_PRIMARY: '#00ffcc', // High contrast Mint
   MIRROR_SECONDARY: '#f0f0f0', // Clean White-Grey
-  MIRROR_ACCENT: '#ffdd00'
+  MIRROR_ACCENT: '#ffdd00',
+  PURPLE: '#bf00ff',
+  ORANGE: '#ff8c00',
+  CRIMSON: '#ff0033'
+};
+
+export const ARCHETYPES = {
+  ZENITH_VOYAGER: { 
+    title: "ZENITH VOYAGER", 
+    icon: "diamond", 
+    color: 'linear-gradient(45deg, #0ddff2, #ff2d55, #00ffcc)', 
+    rarity: 'ULTIMATE',
+    condition: "Surpass Level 15 in a single synchronization run."
+  },
+  NEURAL_SINGULARITY: { 
+    title: "NEURAL SINGULARITY", 
+    icon: "verified_user", 
+    color: '#ffffff', 
+    rarity: 'MYTHIC',
+    condition: "Reach Level 5+ with absolute Zero Hits (Perfect Sync)."
+  },
+  EDGE_WALKER: { 
+    title: "EDGE WALKER", 
+    icon: "warning", 
+    color: '#ff0033', 
+    rarity: 'ULTRA RARE',
+    condition: "Travel >3,000 units while Stability is below 20%."
+  },
+  GRAND_HARMONIZER: { 
+    title: "GRAND HARMONIZER", 
+    icon: "auto_awesome", 
+    color: '#bf00ff', 
+    rarity: 'LEGENDARY',
+    condition: "Achieve a sequence of 5 consecutive Perfect Squeezes."
+  },
+  SPECTRAL_GLITCH: { 
+    title: "SPECTRAL GLITCH", 
+    icon: "blur_on", 
+    color: '#00ffcc', 
+    rarity: 'RARE',
+    condition: "Harvest >200 Shards in a single Mirror World phase."
+  },
+  ELASTIC_MIND: { 
+    title: "ELASTIC MIND", 
+    icon: "waves", 
+    color: '#ff8c00', 
+    rarity: 'SPECIAL',
+    condition: "Collect a total of >600 energy particles in one run."
+  },
+  INFINITE_VOYAGER: { 
+    title: "INFINITE VOYAGER", 
+    icon: "rocket_launch", 
+    color: '#0ddff2', 
+    rarity: 'UNCOMMON',
+    condition: "Cover a total distance of >15,000 units."
+  },
+  VOID_REAPER: { 
+    title: "VOID REAPER", 
+    icon: "flare", 
+    color: '#00ffcc', 
+    rarity: 'UNCOMMON',
+    condition: "Secure >20 Shards during a Mirror World harvest."
+  },
+  THE_ARCHITECT: { 
+    title: "THE ARCHITECT", 
+    icon: "architecture", 
+    color: '#ffcc00', 
+    rarity: 'COMMON',
+    condition: "Maintain an average Sync Resonance above 85%."
+  },
+  NEURON_SYNCER: { 
+    title: "NEURON SYNCER", 
+    icon: "neurology", 
+    color: '#ff2d55', 
+    rarity: 'COMMON',
+    condition: "Standard neural synchronization link established."
+  }
 };
 
 export const PHYSICS = {
